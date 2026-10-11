@@ -1,10 +1,12 @@
 """Claude Subscription DirectSDK (Experimental) — standalone Hermes model-provider registration."""
+import dataclasses
 from datetime import datetime, timezone
 import logging
 import math
 import os
 import shutil
 
+from agent.usage_pricing import CostResult
 from providers import register_provider
 from providers.base import ProviderProfile
 
@@ -17,6 +19,10 @@ except ImportError:
     from directsdk_setup import INSTALL_HINT, _resolve
 
 logger = logging.getLogger(__name__)
+
+# Core cost results gained `list_price_usd` (hermes-agent#136076); older cores report the same
+# included/$0 without the gauge. Drop this check once the minimum supported core has the field.
+_CORE_HAS_LIST_PRICE = 'list_price_usd' in {f.name for f in dataclasses.fields(CostResult)}
 
 # Core checks `process_command` with a PATH-only `shutil.which` before this plugin is asked, so a CLI found only in
 # an install prefix is handed over as its absolute path; a PATH hit keeps the bare name and follows PATH.
@@ -112,7 +118,6 @@ class ClaudeOAuthDirectSDKProfile(ProviderProfile):
 
     def get_usage_cost(self, model, usage):
         from decimal import Decimal, InvalidOperation
-        from agent.usage_pricing import CostResult
 
         native = (usage.raw_usage or {}).get('native_cost') or {}
         unknown = CostResult(amount_usd=None, status='unknown', source='none', label='n/a',
@@ -132,13 +137,9 @@ class ClaudeOAuthDirectSDKProfile(ProviderProfile):
         # `list_price_usd` so spend consumers summing amount_usd stay truthful.
         included_notes = ('subscription-included (Claude Max); list_price_usd is the native API '
                           'list-price equivalent, not an invoice',)
-        try:
-            return CostResult(amount_usd=Decimal(0), status='included', source='subscription_included',
-                              label='included', list_price_usd=amount, notes=included_notes)
-        except TypeError:
-            # Older core CostResult lacks list_price_usd: still included/$0, gauge dropped.
-            return CostResult(amount_usd=Decimal(0), status='included', source='subscription_included',
-                              label='included', notes=included_notes)
+        gauge = {'list_price_usd': amount} if _CORE_HAS_LIST_PRICE else {}
+        return CostResult(amount_usd=Decimal(0), status='included', source='subscription_included',
+                          label='included', notes=included_notes, **gauge)
 
     def create_client(self, **client_kwargs):
         try:

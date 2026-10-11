@@ -5,9 +5,15 @@ equivalent of the usage. The cost result must say ``included``/``$0`` with the
 gauge on ``list_price_usd`` — never ``estimated``/``provider_cost_api`` (that
 labelled a non-existent invoice and inflated spend reports).
 """
+import dataclasses
+import sys
 from decimal import Decimal
 
-from agent.usage_pricing import CanonicalUsage
+from agent.usage_pricing import CanonicalUsage, CostResult
+
+# Cores before hermes-agent#136076 have no `CostResult.list_price_usd`: there the plugin reports
+# the same included/$0 result without the gauge.
+CORE_HAS_LIST_PRICE = "list_price_usd" in {f.name for f in dataclasses.fields(CostResult)}
 
 
 def _usage(total="2.41", models=None, basis="list"):
@@ -24,7 +30,10 @@ def test_list_price_cost_is_included_with_gauge(profile):
     assert result.status == "included"
     assert result.source == "subscription_included"
     assert result.label == "included"
-    assert result.list_price_usd == Decimal("2.41")
+    if CORE_HAS_LIST_PRICE:
+        assert result.list_price_usd == Decimal("2.41")
+    else:
+        assert not hasattr(result, "list_price_usd")
     assert "list-price equivalent" in " ".join(result.notes)
 
 
@@ -32,7 +41,22 @@ def test_zero_list_price_is_still_included(profile):
     result = profile.get_usage_cost("claude-opus-5-5[1m]", _usage("0"))
     assert result.amount_usd == Decimal("0")
     assert result.status == "included"
-    assert result.list_price_usd == Decimal("0")
+    if CORE_HAS_LIST_PRICE:
+        assert result.list_price_usd == Decimal("0")
+    else:
+        assert not hasattr(result, "list_price_usd")
+
+
+def test_core_without_list_price_falls_back_to_included_without_gauge(profile, monkeypatch):
+    """Forces the no-field path so it is covered on cores that do have the field."""
+    monkeypatch.setattr(sys.modules[type(profile).__module__], "_CORE_HAS_LIST_PRICE", False)
+    result = profile.get_usage_cost("claude-opus-5-5[1m]", _usage("2.41"))
+    assert result.amount_usd == Decimal("0")
+    assert result.status == "included"
+    assert result.source == "subscription_included"
+    assert result.label == "included"
+    assert getattr(result, "list_price_usd", None) is None
+    assert "list-price equivalent" in " ".join(result.notes)
 
 
 def test_unknown_paths_stay_unknown(profile):

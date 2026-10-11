@@ -69,9 +69,10 @@ def test_resolve_honors_the_env_dict_not_the_process_path(profile, tmp_path):
 
 
 def test_native_alias_metadata_is_bounded_and_never_claims_subscription_invoice(profile):
+    import dataclasses
     from decimal import Decimal
     from agent.model_metadata import get_model_context_length
-    from agent.usage_pricing import CanonicalUsage, estimate_usage_cost, normalize_usage
+    from agent.usage_pricing import CanonicalUsage, CostResult, estimate_usage_cost, normalize_usage
 
     for alias in profile.fallback_models:
         metadata = profile.model_metadata[alias]
@@ -92,7 +93,10 @@ def test_native_alias_metadata_is_bounded_and_never_claims_subscription_invoice(
     assert cost.amount_usd == Decimal("0")
     assert cost.status == "included"
     assert cost.source == "subscription_included"
-    assert cost.list_price_usd == Decimal("0.012345")
+    if "list_price_usd" in {f.name for f in dataclasses.fields(CostResult)}:
+        assert cost.list_price_usd == Decimal("0.012345")
+    else:  # core predates hermes-agent#136076: same result, no gauge
+        assert not hasattr(cost, "list_price_usd")
     assert any("list-price equivalent" in note for note in cost.notes)
     for invalid in (float("nan"), float("inf"), -1, True, None):
         reported["native_cost"]["total_cost_usd"] = invalid
